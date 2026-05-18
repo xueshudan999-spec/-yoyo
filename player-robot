@@ -1,0 +1,27 @@
+using UnityEngine;
+
+public class SwitchAnimation : MonoBehaviour
+{
+    public Animator animator;
+    public float interval = 2.0f;   // 每2秒切换一次
+
+    private float timer;
+
+    void Start()
+    {
+        if (animator == null)
+            animator = GetComponent<Animator>();
+        timer = interval;
+    }
+
+    void Update()
+    {
+        // === 动画切换 ===
+        timer -= Time.deltaTime;
+        if (timer <= 0f)
+        {
+            animator.SetTrigger("Switch");
+            timer = interval;
+        }
+    }
+}
