@@ -1,0 +1,122 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+/// <summary>
+/// 机器人血条控制 —— 挂载在机器人预制体上。
+/// 被子弹命中时 blood（Slider）的 value 变小，红色血条变短。
+/// </summary>
+public class tick : MonoBehaviour
+{
+    [Header("血量设置")]
+    public int maxHealth = 100;              // 最大血量
+    public int currentHealth;                // 当前血量
+
+    [Header("血条绑定")]
+    [Tooltip("拖入 blood 预制体上的 Slider 组件，不拖的话自动查找")]
+    public Slider bloodSlider;               // blood 的 Slider 组件
+
+    [Header("受击效果")]
+    public Color damagedColor = Color.red;   // 受击闪烁颜色
+    public float flashDuration = 0.1f;       // 闪烁时长
+
+    [Header("死亡")]
+    public GameObject deathEffectPrefab;     // 死亡特效预制体
+    public float destroyDelay = 0.5f;        // 死亡后延迟销毁
+
+    // ── 内部 ──
+    private Renderer[] renderers;
+    private Color[] originalColors;
+
+    void Start()
+    {
+        currentHealth = maxHealth;
+
+        // 自动找 blood Slider（如果没手动拖）
+        if (bloodSlider == null)
+            bloodSlider = GetComponentInChildren<Slider>();
+
+        if (bloodSlider == null)
+            Debug.LogWarning("⚠️ tick.cs：未找到 blood Slider");
+        else
+            bloodSlider.value = bloodSlider.maxValue; // 初始满血
+
+        // 缓存 Renderer → 受击闪烁用
+        renderers = GetComponentsInChildren<Renderer>();
+        originalColors = new Color[renderers.Length];
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            if (renderers[i] != null)
+                originalColors[i] = renderers[i].material.color;
+        }
+
+        Debug.Log($" 机器人血量：{currentHealth}/{maxHealth}");
+    }
+
+    // ============================================================
+    //  BulletHit 调用的入口
+    // ============================================================
+    public void TakeDamage(int damage)
+    {
+        if (currentHealth <= 0) return;
+
+        currentHealth -= damage;
+        if (currentHealth < 0) currentHealth = 0;
+
+        Debug.Log($" 受到 {damage} 伤害，剩余 {currentHealth}/{maxHealth}");
+
+        // 更新 Slider → 红色血条变短
+        UpdateBloodBar();
+
+        // 受击闪烁
+        StopAllCoroutines();
+        StartCoroutine(FlashRoutine());
+
+        // 死亡
+        if (currentHealth <= 0)
+            Die();
+    }
+
+    // ============================================================
+    //  血条更新
+    // ============================================================
+    void UpdateBloodBar()
+    {
+        if (bloodSlider == null) return;
+
+        float pct = (float)currentHealth / maxHealth;
+        bloodSlider.value = Mathf.Lerp(bloodSlider.minValue, bloodSlider.maxValue, pct);
+    }
+
+    // ============================================================
+    //  受击闪烁
+    // ============================================================
+    System.Collections.IEnumerator FlashRoutine()
+    {
+        foreach (Renderer r in renderers)
+            if (r != null) r.material.color = damagedColor;
+
+        yield return new WaitForSeconds(flashDuration);
+
+        for (int i = 0; i < renderers.Length; i++)
+            if (renderers[i] != null) renderers[i].material.color = originalColors[i];
+    }
+
+    // ============================================================
+    //  死亡
+    // ============================================================
+    void Die()
+    {
+        Debug.Log(" 机器人死亡");
+
+        if (deathEffectPrefab != null)
+            Instantiate(deathEffectPrefab, transform.position, Quaternion.identity);
+
+        Collider col = GetComponent<Collider>();
+        if (col != null) col.enabled = false;
+
+        Rigidbody rb = GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = true;
+
+        Destroy(gameObject, destroyDelay);
+    }
+}
