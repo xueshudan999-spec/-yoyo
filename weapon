@@ -1,0 +1,114 @@
+using System.Collections;
+using UnityEngine;
+
+/// <summary>
+/// 枪支后坐力 + 震动动效合一。
+/// bullet.cs 在射击时只调 PlayFireAnimation()，全部动效由这里统一管理。
+/// </summary>
+public class weapon : MonoBehaviour
+{
+    [Header("目标")]
+    [Tooltip("要动的那把枪的 Transform（默认挂载的物体自身）")]
+    public Transform weaponTransform;
+
+    [Header("后坐力")]
+    [Tooltip("枪身后退距离")]
+    public float recoilDistance = 0.12f;
+    [Tooltip("后坐力冲击时间")]
+    public float recoilDuration = 0.03f;
+    [Tooltip("恢复原位时间")]
+    public float recoverDuration = 0.15f;
+
+    [Header("抖动震动")]
+    [Tooltip("抖动幅度（越大震得越猛）")]
+    public float shakeIntensity = 0.12f;
+    [Tooltip("抖动频率")]
+    public float shakeSpeed = 45f;
+
+    [Header("调试")]
+    public bool showDebugLog = false;
+
+    // ── 内部状态 ──
+    private Vector3 originalPos;
+    private bool isFiring = false;
+
+    void Start()
+    {
+        if (weaponTransform == null)
+            weaponTransform = transform;
+
+        originalPos = weaponTransform.localPosition;
+    }
+
+    // ============================================================
+    //  对外接口 —— bullet.cs 射击时调用
+    // ============================================================
+    public void PlayFireAnimation()
+    {
+        // 如果正在播放就中断，重新从头震
+        if (isFiring)
+            StopAllCoroutines();
+
+        StartCoroutine(FireRoutine());
+    }
+
+    // ============================================================
+    //  完整的开火动效：后坐力后退 → 抖动 → 恢复
+    // ============================================================
+    IEnumerator FireRoutine()
+    {
+        isFiring = true;
+        float elapsed;
+
+        // ── 阶段一：瞬间向后冲击 ──
+        Vector3 recoilTarget = originalPos + Vector3.back * recoilDistance;
+
+        elapsed = 0f;
+        while (elapsed < recoilDuration)
+        {
+            float t = elapsed / recoilDuration;
+            weaponTransform.localPosition = Vector3.Lerp(originalPos, recoilTarget, t);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        weaponTransform.localPosition = recoilTarget;
+
+        if (showDebugLog)
+            Debug.Log("🔫 后坐力冲击完成");
+
+        // ── 阶段二：抖动 + 逐渐回弹 ──
+        elapsed = 0f;
+        while (elapsed < recoverDuration)
+        {
+            float t = elapsed / recoverDuration;
+
+            // 基准位置：从后坐力终点慢慢回到原位
+            Vector3 basePos = Vector3.Lerp(recoilTarget, originalPos, t);
+
+            // 抖动偏移：震动幅度随时间衰减
+            float decay = 1f - t;                     // 线性衰减
+            // decay = 1f - t * t;                    // 更快衰减（开头猛后面柔）
+            // decay = (1f - t) * (1f - t);           // 更柔和的收尾
+
+            float noiseX = Mathf.PerlinNoise(Time.time * shakeSpeed,          0f)           * 2f - 1f;
+            float noiseY = Mathf.PerlinNoise(0f,                              Time.time * shakeSpeed) * 2f - 1f;
+            float noiseZ = Mathf.PerlinNoise(Time.time * shakeSpeed * 0.7f,
+                                             Time.time * shakeSpeed * 1.3f)                * 2f - 1f;
+
+            Vector3 shakeOffset = new Vector3(noiseX, noiseY, noiseZ)
+                                * shakeIntensity * decay;
+
+            weaponTransform.localPosition = basePos + shakeOffset;
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        // ── 阶段三：精确归位 ──
+        weaponTransform.localPosition = originalPos;
+        isFiring = false;
+
+        if (showDebugLog)
+            Debug.Log(" 开火动效结束，归位");
+    }
+}
