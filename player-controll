@@ -1,0 +1,119 @@
+using UnityEngine;
+
+public class player_control : MonoBehaviour
+{
+    [Header("移动设置")]
+    public float walkSpeed = 5f;        // 行走速度
+    public float runSpeed = 10f;         // 奔跑速度（按住 Shift）
+    public float jumpForce = 5f;         // 跳跃力度
+    public float gravity = -9.81f;       // 重力加速度
+
+    [Header("视角设置")]
+    public float mouseSensitivity = 2f;  // 鼠标灵敏度
+    public float maxLookAngle = 80f;     // 最大仰/俯角度
+
+    [Header("组件绑定")]
+    public Camera playerCamera;          // 玩家摄像机，不拖拽的话自动找
+
+    // 私有变量
+    private float verticalRotation = 0f; // 当前垂直角度（绕X轴）
+    private bool cursorLocked = false;   // 鼠标是否锁定
+    private CharacterController controller;
+    private float verticalVelocity = 0f; // 垂直速度（用于跳跃和重力）
+
+    void Start()
+    {
+        // 自动找摄像机（如果没有手动绑定）
+        if (playerCamera == null)
+            playerCamera = GetComponentInChildren<Camera>();
+
+        // 自动找 CharacterController
+        controller = GetComponent<CharacterController>();
+        if (controller == null)
+            Debug.LogWarning("没有 CharacterController，移动可能不正常");
+    }
+
+    void Update()
+    {
+        // ── 鼠标视角控制：按住左键锁定鼠标并转动视角 ──
+        if (Input.GetMouseButtonDown(0))
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            cursorLocked = true;
+        }
+        else if (Input.GetMouseButtonUp(0))
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            cursorLocked = false;
+        }
+
+        // 只有在锁定鼠标时才转动视角
+        if (cursorLocked)
+        {
+            float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
+            float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+
+            // 水平旋转：绕Y轴转（旋转整个 Player）
+            transform.Rotate(0f, mouseX, 0f);
+
+            // 垂直旋转：绕X轴转（只旋转摄像机）
+            verticalRotation -= mouseY;
+            verticalRotation = Mathf.Clamp(verticalRotation, -maxLookAngle, maxLookAngle);
+            playerCamera.transform.localRotation = Quaternion.Euler(verticalRotation, 0f, 0f);
+        }
+
+        // ── WASD 移动 ──
+        float horizontal = Input.GetAxis("Horizontal");   // A/D
+        float vertical   = Input.GetAxis("Vertical");     // W/S
+
+        // 相对摄像机朝向计算移动方向
+        Vector3 moveDirection = (transform.right * horizontal + transform.forward * vertical).normalized;
+
+        // 按住 Shift 加速跑
+        float speed = Input.GetKey(KeyCode.LeftShift) ? runSpeed : walkSpeed;
+
+        if (controller != null)
+        {
+            // ── 跳跃：按 Y 键 ──
+            if (Input.GetKeyDown(KeyCode.Y) && controller.isGrounded)
+            {
+                verticalVelocity = jumpForce;
+                Debug.Log("跳跃！");
+            }
+            else if (Input.GetKeyDown(KeyCode.Y) && !controller.isGrounded)
+            {
+                Debug.Log(" 按了 Y 但不在 grounded 状态 — 检查地板碰撞器");
+            }
+
+            // ── 重力处理 ──
+            if (controller.isGrounded && verticalVelocity < 0f)
+            {
+                verticalVelocity = -0.5f; // 轻轻贴地，防止往下钻
+            }
+            else
+            {
+                verticalVelocity += gravity * Time.deltaTime; // 持续加速下落
+            }
+
+            // ── 合成最终移动向量 ──
+            Vector3 move = moveDirection * speed;
+            move.y = verticalVelocity;
+            controller.Move(move * Time.deltaTime);
+        }
+        else
+        {
+            // 没有 CharacterController 时的后备方案
+            transform.position += moveDirection * speed * Time.deltaTime;
+        }
+    }
+
+    // 快捷方法：锁定/解锁鼠标
+    public void SetCursorLock(bool locked)
+    {
+        cursorLocked = locked;
+        Cursor.lockState = locked ? CursorLockMode.Locked : CursorLockMode.None;
+        Cursor.visible = !locked;
+    }
+}
