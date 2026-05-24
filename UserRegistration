@@ -1,0 +1,354 @@
+using UnityEngine;
+using UnityEngine.UI;
+using System.Collections.Generic;
+using System.IO;
+
+/// <summary>
+/// 用户注册系统
+/// - 点击按钮弹出注册面板
+/// - 输入用户名后保存到 JSON 文件
+/// - 数据持久化在 Application.persistentDataPath/UserData/users.json
+/// </summary>
+public class UserRegistration : MonoBehaviour
+{
+    [Header("注册按钮")]
+    public Button registerButton;      // 触发注册的按钮
+
+    [Header("UI 设置")]
+    public string panelTitle = "用户注册";
+    public int fontSize = 24;
+
+    // ── 运行时创建的 UI ──
+    private GameObject panelObj;
+    private InputField usernameInput;
+    private Text feedbackText;
+    private CanvasGroup panelGroup;
+
+    // ── 数据路径 ──
+    private static string DataFolder => Path.Combine(Application.persistentDataPath, "UserData");
+    private static string DataFile => Path.Combine(DataFolder, "users.json");
+
+    // ── 用户数据模型 ──
+    [System.Serializable]
+    public class UserData
+    {
+        public string username;
+        public string registerDate;
+
+        public UserData(string name)
+        {
+            username = name;
+            registerDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+    }
+
+    [System.Serializable]
+    public class UserList
+    {
+        public List<UserData> users = new List<UserData>();
+    }
+
+    void Start()
+    {
+        // ⚡ 如果和 start.cs 在同一个对象上（动态添加），不自动绑定按钮
+        if (GetComponent<start>() != null)
+        {
+            Debug.Log("📎 UserRegistration: 由 start.cs 管理，跳过自动绑定");
+            return;
+        }
+
+        // 自动绑定按钮
+        if (registerButton == null)
+            registerButton = GetComponent<Button>();
+
+        if (registerButton != null)
+        {
+            registerButton.onClick.AddListener(ShowRegistrationPanel);
+            Debug.Log("用户注册按钮已绑定");
+        }
+        else
+        {
+            Debug.LogWarning("未找到 Button 组件，请手动挂载");
+        }
+    }
+
+    // ============================================================
+    /// <summary> 显示注册面板 </summary>
+    public void ShowRegistrationPanel()
+    {
+        // 防止重复创建
+        if (panelObj != null)
+        {
+            panelObj.SetActive(true);
+            return;
+        }
+
+        CreateRegistrationPanel();
+    }
+
+    // ============================================================
+    /// <summary> 创建注册 UI 面板 </summary>
+    void CreateRegistrationPanel()
+    {
+        // ── 找 Canvas ──
+        Canvas canvas = FindObjectOfType<Canvas>();
+        if (canvas == null)
+        {
+            GameObject canvasObj = new GameObject("RegistrationCanvas");
+            canvas = canvasObj.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvasObj.AddComponent<CanvasScaler>();
+            canvasObj.AddComponent<GraphicRaycaster>();
+        }
+
+        // ── 遮罩（点击外面可以关闭） ──
+        panelObj = new GameObject("RegistrationPanel");
+        panelObj.transform.SetParent(canvas.transform, false);
+
+        // CanvasGroup 用于整体控制透明度
+        panelGroup = panelObj.AddComponent<CanvasGroup>();
+        panelGroup.alpha = 0f;
+
+        RectTransform panelRect = panelObj.AddComponent<RectTransform>();
+        panelRect.anchorMin = Vector2.zero;
+        panelRect.anchorMax = Vector2.one;
+        panelRect.sizeDelta = Vector2.zero;
+
+        // 背景遮罩
+        Image overlay = panelObj.AddComponent<Image>();
+        overlay.color = new Color(0, 0, 0, 0.6f);
+        overlay.raycastTarget = true;
+
+        // ── 注册框（居中） ──
+        GameObject boxObj = new GameObject("RegisterBox");
+        boxObj.transform.SetParent(panelObj.transform, false);
+
+        RectTransform boxRect = boxObj.AddComponent<RectTransform>();
+        boxRect.sizeDelta = new Vector2(400, 300);
+        boxRect.anchorMin = new Vector2(0.5f, 0.5f);
+        boxRect.anchorMax = new Vector2(0.5f, 0.5f);
+        boxRect.anchoredPosition = Vector2.zero;
+
+        Image boxBg = boxObj.AddComponent<Image>();
+        boxBg.color = new Color(0.15f, 0.15f, 0.2f, 0.95f);
+        boxBg.raycastTarget = true;
+
+        // ── 标题 ──
+        CreateText(boxObj, "TitleText", panelTitle, new Vector2(0, 100), new Vector2(300, 40), fontSize + 4, TextAnchor.MiddleCenter, Color.white);
+
+        // ── 用户名输入框 ──
+        GameObject inputObj = new GameObject("UsernameInput");
+        inputObj.transform.SetParent(boxObj.transform, false);
+
+        RectTransform inputRect = inputObj.AddComponent<RectTransform>();
+        inputRect.sizeDelta = new Vector2(300, 40);
+        inputRect.anchorMin = new Vector2(0.5f, 0.5f);
+        inputRect.anchorMax = new Vector2(0.5f, 0.5f);
+        inputRect.anchoredPosition = new Vector2(0, 30);
+
+        Image inputBg = inputObj.AddComponent<Image>();
+        inputBg.color = new Color(1, 1, 1, 0.15f);
+
+        GameObject inputTextObj = new GameObject("Text");
+        inputTextObj.transform.SetParent(inputObj.transform, false);
+        Text inputText = inputTextObj.AddComponent<Text>();
+        inputText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        inputText.fontSize = fontSize;
+        inputText.color = Color.white;
+        inputText.alignment = TextAnchor.MiddleLeft;
+        inputText.raycastTarget = false;
+
+        RectTransform inputTextRect = inputTextObj.GetComponent<RectTransform>();
+        inputTextRect.anchorMin = Vector2.zero;
+        inputTextRect.anchorMax = Vector2.one;
+        inputTextRect.sizeDelta = new Vector2(-20, -10);
+        inputTextRect.anchoredPosition = Vector2.zero;
+
+        // InputField 组件
+        usernameInput = inputObj.AddComponent<InputField>();
+        usernameInput.textComponent = inputText;
+        usernameInput.placeholder = CreatePlaceholder(inputObj, "请输入你的用户名...", inputTextRect);
+
+        // ── 注册按钮 ──
+        GameObject regBtnObj = new GameObject("ConfirmButton");
+        regBtnObj.transform.SetParent(boxObj.transform, false);
+
+        RectTransform regBtnRect = regBtnObj.AddComponent<RectTransform>();
+        regBtnRect.sizeDelta = new Vector2(200, 50);
+        regBtnRect.anchorMin = new Vector2(0.5f, 0.5f);
+        regBtnRect.anchorMax = new Vector2(0.5f, 0.5f);
+        regBtnRect.anchoredPosition = new Vector2(0, -40);
+
+        Image regBtnBg = regBtnObj.AddComponent<Image>();
+        regBtnBg.color = new Color(0.2f, 0.5f, 0.8f, 1);
+
+        Button regBtn = regBtnObj.AddComponent<Button>();
+        regBtn.targetGraphic = regBtnBg;
+        ColorBlock colors = regBtn.colors;
+        colors.highlightedColor = new Color(0.3f, 0.6f, 0.9f, 1);
+        colors.pressedColor = new Color(0.1f, 0.3f, 0.6f, 1);
+        regBtn.colors = colors;
+
+        CreateText(regBtnObj, "Label", "确认注册", Vector2.zero, Vector2.zero, fontSize, TextAnchor.MiddleCenter, Color.white);
+
+        regBtn.onClick.AddListener(ConfirmRegistration);
+
+        // ── 反馈文字 ──
+        feedbackText = CreateText(boxObj, "FeedbackText", "", new Vector2(0, -90), new Vector2(350, 30), fontSize - 2, TextAnchor.MiddleCenter, new Color(0.3f, 1, 0.3f, 1));
+
+        // ── 点击遮罩关闭 ──
+        EventTriggerListener listener = panelObj.AddComponent<EventTriggerListener>();
+        Button overlayBtn = panelObj.AddComponent<Button>();
+        overlayBtn.targetGraphic = overlay;
+        overlayBtn.onClick.AddListener(ClosePanel);
+
+        // ── 淡入动画 ──
+        StartCoroutine(FadeIn());
+    }
+
+    // ============================================================
+    Text CreateText(GameObject parent, string name, string content, Vector2 pos, Vector2 size, int fontSize, TextAnchor align, Color color)
+    {
+        GameObject textObj = new GameObject(name);
+        textObj.transform.SetParent(parent.transform, false);
+
+        RectTransform rect = textObj.AddComponent<RectTransform>();
+        rect.sizeDelta = size;
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = pos;
+
+        Text text = textObj.AddComponent<Text>();
+        text.text = content;
+        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.fontSize = fontSize;
+        text.color = color;
+        text.alignment = align;
+        text.raycastTarget = false;
+
+        return text;
+    }
+
+    Text CreatePlaceholder(GameObject parent, string placeholderText, RectTransform parentRect)
+    {
+        GameObject phObj = new GameObject("Placeholder");
+        phObj.transform.SetParent(parent.transform, false);
+
+        RectTransform phRect = phObj.AddComponent<RectTransform>();
+        phRect.anchorMin = Vector2.zero;
+        phRect.anchorMax = Vector2.one;
+        phRect.sizeDelta = new Vector2(-20, -10);
+        phRect.anchoredPosition = Vector2.zero;
+
+        Text phText = phObj.AddComponent<Text>();
+        phText.text = placeholderText;
+        phText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        phText.fontSize = fontSize;
+        phText.color = new Color(1, 1, 1, 0.4f);
+        phText.alignment = TextAnchor.MiddleLeft;
+
+        return phText;
+    }
+
+    // ============================================================
+    /// <summary> 确认注册 </summary>
+    public void ConfirmRegistration()
+    {
+        string username = usernameInput.text.Trim();
+
+        if (string.IsNullOrEmpty(username))
+        {
+            feedbackText.text = "用户名不能为空！";
+            feedbackText.color = new Color(1, 0.3f, 0.3f, 1);
+            return;
+        }
+
+        if (username.Length < 2)
+        {
+            feedbackText.text = "⚠️ 用户名至少 2 个字符！";
+            feedbackText.color = new Color(1, 0.3f, 0.3f, 1);
+            return;
+        }
+
+        // ── 读取已有数据 ──
+        UserList userList = LoadUsers();
+
+        // ── 检查重名 ──
+        foreach (UserData u in userList.users)
+        {
+            if (u.username == username)
+            {
+                feedbackText.text = "该用户名已被注册！";
+                feedbackText.color = new Color(1, 0.3f, 0.3f, 1);
+                return;
+            }
+        }
+
+        // ── 添加新用户 ──
+        UserData newUser = new UserData(username);
+        userList.users.Add(newUser);
+
+        // ── 保存到 JSON ──
+        SaveUsers(userList);
+
+        feedbackText.text = $"注册成功！欢迎 {username} 🎉";
+        feedbackText.color = new Color(0.3f, 1f, 0.3f, 1);
+
+        Debug.Log($"新用户注册: {username} | 日期: {newUser.registerDate}");
+        Debug.Log($"数据保存在: {DataFile}");
+
+        // ── 2秒后关闭面板 ──
+        Invoke(nameof(ClosePanel), 2f);
+    }
+
+    // ============================================================
+    /// <summary> 加载所有用户 </summary>
+    UserList LoadUsers()
+    {
+        if (!File.Exists(DataFile))
+            return new UserList();
+
+        string json = File.ReadAllText(DataFile);
+        return JsonUtility.FromJson<UserList>(json) ?? new UserList();
+    }
+
+    /// <summary> 保存所有用户 </summary>
+    void SaveUsers(UserList userList)
+    {
+        // 确保目录存在
+        if (!Directory.Exists(DataFolder))
+            Directory.CreateDirectory(DataFolder);
+
+        string json = JsonUtility.ToJson(userList, true);
+        File.WriteAllText(DataFile, json);
+    }
+
+    // ============================================================
+    void ClosePanel()
+    {
+        if (panelObj != null)
+            panelObj.SetActive(false);
+    }
+
+    // ============================================================
+    private System.Collections.IEnumerator FadeIn()
+    {
+        float duration = 0.2f;
+        float t = 0;
+        while (t < duration)
+        {
+            t += Time.deltaTime;
+            panelGroup.alpha = Mathf.Lerp(0, 1, t / duration);
+            yield return null;
+        }
+        panelGroup.alpha = 1;
+    }
+}
+
+/// <summary>
+/// 辅助类：让任何 GameObject 支持事件监听
+/// </summary>
+public class EventTriggerListener : MonoBehaviour
+{
+    // 空类，仅用来挂载识别
+}
