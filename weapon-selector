@@ -1,0 +1,303 @@
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+
+/// <summary>
+/// 运行时武器选择器
+/// - 在 weapon-swap 场景中：自动找到所有枪支按钮并绑定点击事件
+/// - 在 FPS-scenes 中：自动替换默认枪支为选中的武器
+/// 
+/// 零配置，挂到场景任意 GameObject 上即可使用。
+/// 打包后也能正常使用。
+/// </summary>
+public class weapon_selector : MonoBehaviour
+{
+    [Header("目标场景")]
+    public string targetScene = "FPS-scenes";
+
+    [Header("反馈文字（可选）")]
+    public Text feedbackText;
+
+    [Header("位置/旋转微调")]
+    [Tooltip("全局基础旋转偏移（Euler 角度），会叠加在每个武器上")]
+    public Vector3 baseRotationOffset = new Vector3(0, 180, 0);
+    [Tooltip("每把枪独立的额外旋转偏移（逆时针为正），索引 0=默认/1=枪支1/2=枪支2/3=枪支3/4=枪支4")]
+    public Vector3[] perWeaponRotation = new Vector3[]
+    {
+        new Vector3(0, 0, 0),     // 索引0：默认枪支（不动）
+        new Vector3(0, 0, 0),     // 索引1：枪支1（不换模型）
+        new Vector3(0, 0, 0),     // 索引2：枪支2
+        new Vector3(0, -10, 0),   // 索引3：枪支3 → 逆时针10°
+        new Vector3(0, 0, 0),     // 索引4：枪支4
+    };
+    [Tooltip("替换武器后叠加的位置偏移，相对于默认枪支的位置")]
+    public Vector3 positionOffset = new Vector3(0, 0, -0.2f);
+
+    // ── 静态缓存：场景间传递武器选择 ──
+    public static string pendingWeaponPath = null;
+    public static string pendingWeaponName = null;
+
+    // ── 武器配置 ──
+    private static readonly string[] WeaponKeys = new string[]
+    {
+        "枪支",   // 索引 0：默认
+        "枪支1",  // 索引 1
+        "枪支2",  // 索引 2
+        "枪支3",  // 索引 3
+        "枪支4",  // 索引 4
+    };
+
+    private static readonly string[] WeaponDisplayNames = new string[]
+    {
+        "默认枪支",
+        "枪支 1 ",
+        "枪支 2 ",
+        "枪支 3 ",
+        "枪支 4 ",
+    };
+
+    // ============================================================
+    void Start()
+    {
+        string currentScene = SceneManager.GetActiveScene().name;
+
+        if (currentScene == targetScene || currentScene == "FPS-scenes")
+        {
+            // 在 FPS-scenes → 替换武器
+            StartCoroutine(ApplyWeaponSwap());
+        }
+        else
+        {
+            // 在 weapon-swap → 自动绑定所有枪支按钮
+            AutoBindGunButtons();
+        }
+    }
+
+    // ============================================================
+    //  核心：自动查找并绑定所有枪支按钮
+    // ============================================================
+    void AutoBindGunButtons()
+    {
+        // 找场景中所有 Button
+        Button[] allButtons = FindObjectsOfType<Button>(true);
+
+        foreach (Button btn in allButtons)
+        {
+            string btnName = btn.gameObject.name;
+
+            // 匹配按钮名：枪支1 → SelectGun(1)
+            for (int i = 0; i < WeaponKeys.Length; i++)
+            {
+                if (btnName == WeaponKeys[i])
+                {
+                    int capturedIndex = i; // 闭包捕获
+                    btn.onClick.AddListener(() => SelectWeapon(capturedIndex));
+                    Debug.Log($" 自动绑定: {btnName} → SelectGun({capturedIndex})");
+                    break;
+                }
+            }
+        }
+
+        Debug.Log($" 武器选择器就绪，找到 {allButtons.Length} 个按钮并完成绑定");
+    }
+
+    // ============================================================
+    //  选择武器
+    // ============================================================
+    public void SelectWeapon(int index)
+    {
+        if (index < 0 || index >= WeaponKeys.Length)
+        {
+            Debug.LogWarning($" 武器索引 {index} 无效");
+            return;
+        }
+
+        // 索引 1（枪支1）→ 重定向到默认枪支
+        if (index == 1)
+        {
+            pendingWeaponPath = "枪支";
+            pendingWeaponName = WeaponDisplayNames[0];
+        }
+        else
+        {
+            pendingWeaponPath = WeaponKeys[index];
+            pendingWeaponName = WeaponDisplayNames[index];
+        }
+
+        // 持久化
+        PlayerPrefs.SetString("WeaponPath", pendingWeaponPath);
+        PlayerPrefs.SetString("WeaponName", pendingWeaponName);
+        PlayerPrefs.Save();
+
+        ShowFeedback($"已选择 {pendingWeaponName} ");
+        Debug.Log($" 武器已选择: {pendingWeaponName}");
+
+        // 跳转（带淡入淡出）
+        SceneTransition.LoadScene(targetScene);
+    }
+
+    // ============================================================
+    //  公开方法（备用：手动调用）
+    // ============================================================
+    public void SelectDefault() => SelectWeapon(0);
+    public void SelectGun1() => SelectWeapon(1);
+    public void SelectGun2() => SelectWeapon(2);
+    public void SelectGun3() => SelectWeapon(3);
+    public void SelectGun4() => SelectWeapon(4);
+
+    // ============================================================
+    //  在 FPS-scenes 中替换武器
+    // ============================================================
+    private System.Collections.IEnumerator ApplyWeaponSwap()
+    {
+        yield return null; // 等一帧确保场景完全加载
+
+        string weaponKey = pendingWeaponPath;
+        if (string.IsNullOrEmpty(weaponKey))
+            weaponKey = PlayerPrefs.GetString("WeaponPath", "枪支");
+
+        string weaponName = pendingWeaponName;
+        if (string.IsNullOrEmpty(weaponName))
+            weaponName = PlayerPrefs.GetString("WeaponName", "默认枪支");
+
+        // 默认枪 → 不动
+        if (weaponKey == "枪支" || string.IsNullOrEmpty(weaponKey))
+        {
+            Debug.Log("🎯 使用默认枪支");
+            yield break;
+        }
+
+        // 加载 prefab（编辑器下用 AssetDatabase）
+        GameObject prefab = null;
+#if UNITY_EDITOR
+        prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/weapon/" + weaponKey + ".prefab");
+#endif
+        if (prefab == null)
+            prefab = Resources.Load<GameObject>(weaponKey);
+        if (prefab == null)
+        {
+            Debug.LogError($" 无法加载武器 {weaponKey}（不在 Resources 文件夹也不在 Assets/weapon/）");
+            yield break;
+        }
+
+        // 找默认枪位置
+        Transform defaultGun = FindDefaultGun();
+        if (defaultGun == null)
+        {
+            Debug.LogError(" 找不到默认枪支位置");
+            yield break;
+        }
+
+        // 确定武器索引（用于 perWeaponRotation）
+        int weaponIdx = System.Array.IndexOf(WeaponKeys, weaponKey);
+        ReplaceGun(defaultGun, prefab, weaponName, weaponIdx);
+    }
+
+    // ============================================================
+    void ReplaceGun(Transform oldGun, GameObject newPrefab, string newName, int weaponIndex = -1)
+    {
+        Transform parent = oldGun.parent;
+
+        // 只复制位置，不碰旋转和缩放
+        // 每种枪的 FBX 模型朝向/尺寸不同，预制体已设好正确的值
+        Vector3 localPos = oldGun.localPosition;
+
+        // 保存旧脚本参数
+        weapon oldWeapon = oldGun.GetComponent<weapon>();
+        bullet oldBullet = oldGun.GetComponent<bullet>();
+
+        Destroy(oldGun.gameObject);
+
+        GameObject newGun = Instantiate(newPrefab, parent);
+        newGun.transform.localPosition = localPos + positionOffset;
+        // 基础旋转偏移（全局）+ 每把枪独立微调
+        Vector3 totalRot = baseRotationOffset;
+        if (weaponIndex >= 0 && weaponIndex < perWeaponRotation.Length)
+            totalRot += perWeaponRotation[weaponIndex];
+        newGun.transform.localRotation *= Quaternion.Euler(totalRot);
+        // 保留预制体自身的缩放（每个模型的尺寸不同）
+        newGun.name = newName;
+
+        // weapon.cs
+        weapon w = newGun.GetComponent<weapon>();
+        if (w == null) w = newGun.AddComponent<weapon>();
+        w.weaponTransform = newGun.transform;
+        if (oldWeapon != null)
+        {
+            w.recoilDistance = oldWeapon.recoilDistance;
+            w.recoilDuration = oldWeapon.recoilDuration;
+            w.recoverDuration = oldWeapon.recoverDuration;
+            w.shakeIntensity = oldWeapon.shakeIntensity;
+            w.shakeSpeed = oldWeapon.shakeSpeed;
+        }
+
+        // bullet.cs
+        bullet b = newGun.GetComponent<bullet>();
+        if (b == null) b = newGun.AddComponent<bullet>();
+        if (oldBullet != null)
+        {
+            b.bulletPrefab = oldBullet.bulletPrefab;
+            b.bulletSpeed = oldBullet.bulletSpeed;
+            b.bulletLifetime = oldBullet.bulletLifetime;
+            b.flightTime = oldBullet.flightTime;
+            b.fireRate = oldBullet.fireRate;
+            b.bulletSize = oldBullet.bulletSize;
+            b.bulletDamage = oldBullet.bulletDamage;
+            b.directionMode = oldBullet.directionMode;
+            b.horizontalOffset = oldBullet.horizontalOffset;
+            b.verticalOffset = oldBullet.verticalOffset;
+            b.maxAmmo = oldBullet.maxAmmo;
+            b.currentAmmo = oldBullet.currentAmmo;
+            b.infiniteAmmo = oldBullet.infiniteAmmo;
+            b.raycastLayerMask = oldBullet.raycastLayerMask;
+            b.raycastMaxDist = oldBullet.raycastMaxDist;
+            b.showDebugLine = oldBullet.showDebugLine;
+            b.hitEffectPrefab = oldBullet.hitEffectPrefab;
+            b.hitEffectDuration = oldBullet.hitEffectDuration;
+            // 复制射击音效设置（不复制 audioSource，新枪的 Start() 会自动创建/查找）
+            b.fireSound = oldBullet.fireSound;
+            b.volume = oldBullet.volume;
+        }
+
+        Debug.Log($" 武器替换完成: {newName}");
+    }
+
+    // ============================================================
+    Transform FindDefaultGun()
+    {
+        GameObject weaponView = GameObject.Find("weapon-view");
+        if (weaponView != null && weaponView.transform.childCount > 0)
+            return weaponView.transform.GetChild(0);
+
+        Camera cam = Camera.main;
+        if (cam != null)
+        {
+            foreach (Transform child in cam.transform)
+                if (child.GetComponent<weapon>() != null || child.GetComponent<bullet>() != null)
+                    return child;
+            if (cam.transform.childCount > 0)
+                return cam.transform.GetChild(0);
+        }
+
+        weapon found = FindObjectOfType<weapon>();
+        return found != null ? found.transform : null;
+    }
+
+    // ============================================================
+    void ShowFeedback(string msg)
+    {
+        if (feedbackText != null)
+            feedbackText.text = msg;
+        Debug.Log(msg);
+    }
+
+    public void ResetWeapon()
+    {
+        pendingWeaponPath = null;
+        pendingWeaponName = null;
+        PlayerPrefs.DeleteKey("WeaponPath");
+        PlayerPrefs.DeleteKey("WeaponName");
+        PlayerPrefs.Save();
+        ShowFeedback("已重置为默认枪支 ");
+    }
+}
