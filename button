@@ -1,0 +1,30 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+/// <summary>
+/// 按钮脚本：点击跳转至目标场景（带淡入淡出过渡）
+/// </summary>
+public class button : MonoBehaviour
+{
+    [Header("场景设置")]
+    public string sceneName = "weapon-swap";
+
+    void Start()
+    {
+        // 自动绑定点击事件（如果挂在 Button 上）
+        Button btn = GetComponent<Button>();
+        if (btn != null)
+        {
+            btn.onClick.AddListener(OnButtonClick);
+        }
+    }
+
+    /// <summary>
+    /// 点击按钮 → 带过渡效果加载场景
+    /// </summary>
+    public void OnButtonClick()
+    {
+        Debug.Log($" 点击按钮，跳转到 {sceneName}");
+        SceneTransition.LoadScene(sceneName);
+    }
+}
