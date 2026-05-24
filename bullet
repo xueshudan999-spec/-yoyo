@@ -1,0 +1,414 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+public class bullet : MonoBehaviour
+{
+    [Header("子弹设置")]
+    public GameObject bulletPrefab;          // 子弹预制体（不拖拽的话自动创建小球）
+    public float bulletSpeed = 200f;         // 子弹飞行速度（无目标时的默认值）
+    public float bulletLifetime = 30f;       // 子弹存活时间（秒）
+    public float flightTime = 0.3f;          // 子弹飞到目标的时间（秒），速度会根据距离自动计算
+    public float fireRate = 0.25f;           // 射击间隔（秒）
+    public float bulletSize = 0.05f;         // 子弹大小（没有预制体时生效）
+
+    [Header("伤害")]
+    [Tooltip("每发子弹的伤害值")]
+    public int bulletDamage = 20;
+
+    [Header("方向控制")]
+    public DirectionMode directionMode = DirectionMode.Horizontal;
+    [Tooltip("水平偏移角度（度），正数向右偏，负数向左偏")]
+    public float horizontalOffset = 0f;
+    [Tooltip("垂直偏移角度（度），正数向上偏，负数向下偏\nCamera 模式：在摄像机朝向基础上偏移\nHorizontal 模式：在水平方向基础上偏移")]
+    public float verticalOffset = 0f;
+
+    public enum DirectionMode
+    {
+        Camera,       // 完全跟随摄像机朝向（上下左右都跟）
+        Horizontal,   // 水平直射，忽略摄像机俯仰（默认）
+        CustomAngle   // 水平 ± 自定义垂直偏移
+    }
+
+    [Header("弹药设置")]
+    public int maxAmmo = 12;                 // 最大弹药量
+    public int currentAmmo;                  // 当前剩余弹药
+    public bool infiniteAmmo = false;        // 是否无限子弹
+
+    [Header("枪口位置")]
+    public Transform firePoint;              // 子弹生成位置（枪口），默认用自身
+
+    [Header("射线检测")]
+    public LayerMask raycastLayerMask = ~0;  // 默认检测所有层级
+    public float raycastMaxDist = 1000f;     // 射线最大距离
+    public bool showDebugLine = true;        // 是否显示调试线
+
+    // ── 内部变量 ──
+    private Camera playerCamera;             // 玩家摄像机（用于瞄准方向）
+    private float lastFireTime = 0f;         // 上次射击时间
+    private bool ammoEmptyWarned = false;    // 是否已经提示过弹药用尽
+
+    // ── 子弹实体碰撞时产生的特效参数 ──
+    [Header("击中效果")]
+    public GameObject hitEffectPrefab;       // 击中特效预制体（可选）
+    public float hitEffectDuration = 1f;     // 特效存活时间
+
+    // ── 武器震动 ──
+    private weapon weaponShake;              // 引用 weapon.cs，射击时触发震动
+
+    // ═══════════════════════════════════════════════════════════
+    //  射击音效
+    // ═══════════════════════════════════════════════════════════
+    [Header("射击音效")]
+    public AudioClip fireSound;              // 在 Inspector 里拖拽音频文件到这里
+    public AudioSource audioSource;          // 不拖拽的话会自动创建
+    public float volume = 1.0f;              // 音量倍率
+
+    void Start()
+    {
+        currentAmmo = maxAmmo;
+
+        // ── 自动找摄像机（玩家视角方向即瞄准方向） ──
+        if (playerCamera == null)
+            playerCamera = GetComponentInParent<Camera>();
+        if (playerCamera == null)
+            playerCamera = Camera.main;
+        if (playerCamera == null)
+            Debug.LogWarning(" 没有找到摄像机，子弹无法瞄准目标方向");
+
+        // ── 默认枪口位置 ──
+        if (firePoint == null)
+            firePoint = transform;
+
+        // ── 默认 LayerMask：排除 Default 层（玩家的层），避免射线打到自己 ──
+        if (raycastLayerMask == ~0)
+            raycastLayerMask = ~LayerMask.GetMask("Default");
+
+        // ── 自动找 weapon 组件（枪支震动） ──
+        weaponShake = GetComponent<weapon>();
+        if (weaponShake == null)
+            weaponShake = GetComponentInChildren<weapon>();
+        if (weaponShake == null)
+            Debug.Log(" 未找到 weapon 组件，枪支震动功能未启用");
+
+        // ── 自动设置 AudioSource（如果没有手动拖拽的话） ──
+        if (audioSource == null)
+        {
+            audioSource = GetComponent<AudioSource>();
+            if (audioSource == null)
+                audioSource = gameObject.AddComponent<AudioSource>();
+        }
+
+        Debug.Log($" 弹药已上膛！{currentAmmo}/{maxAmmo}");
+    }
+
+    void Update()
+    {
+        // ── 空格键射击（受射速限制） ──
+        if (Input.GetKeyDown(KeyCode.Space) && Time.time >= lastFireTime + fireRate)
+        {
+            if (currentAmmo > 0 || infiniteAmmo)
+            {
+                Fire();
+            }
+            else if (!ammoEmptyWarned)
+            {
+                ammoEmptyWarned = true;
+                Debug.LogWarning(" 子弹用尽！请按 R 键购买装备补充弹药！");
+            }
+        }
+
+        // ── 按 R 键购买/补弹 ──
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            BuyAmmo();
+        }
+    }
+
+    // ============================================================
+    //  射击流程
+    // ============================================================
+    void Fire()
+    {
+        lastFireTime = Time.time;
+
+        // 消耗子弹
+        if (!infiniteAmmo)
+            currentAmmo--;
+
+        // ① 播放射击音效
+        PlayFireSound();
+
+        // ② 生成子弹
+        SpawnBullet();
+
+        // ③ 统一开火动效（后坐力 + 抖动，由 weapon.cs 管理）
+        if (weaponShake != null)
+            weaponShake.PlayFireAnimation();
+
+        // ④ 更新弹药显示
+        UpdateAmmoDisplay();
+
+        Debug.Log($" 射击！剩余弹药：{currentAmmo}/{maxAmmo}");
+    }
+
+    // ============================================================
+    //  播放射击音效
+    // ============================================================
+    void PlayFireSound()
+    {
+        if (fireSound != null && audioSource != null)
+        {
+            audioSource.PlayOneShot(fireSound, volume);
+        }
+        else if (fireSound == null)
+        {
+            Debug.LogWarning(" 未设置 fireSound（射击音效），请在 Inspector 拖入音频文件");
+        }
+    }
+
+    // ============================================================
+    //  子弹生成
+    // ============================================================
+    void SpawnBullet()
+    {
+        if (playerCamera == null)
+        {
+            Debug.LogError(" 没有摄像机，无法射击");
+            return;
+        }
+
+        // ── 根据 directionMode 计算子弹飞行方向 ──
+        Vector3 aimDir;
+
+        switch (directionMode)
+        {
+            case DirectionMode.Camera:
+                // 完全跟随摄像机朝向（你往哪看子弹就往哪飞）
+                aimDir = playerCamera.transform.forward;
+                break;
+
+            case DirectionMode.Horizontal:
+                // 水平直射，忽略摄像机俯仰
+                aimDir = playerCamera.transform.forward;
+                aimDir.y = 0f;
+                aimDir.Normalize();
+                break;
+
+            case DirectionMode.CustomAngle:
+            default:
+                // 水平方向 + 自定义偏移
+                aimDir = playerCamera.transform.forward;
+                aimDir.y = 0f;
+                aimDir.Normalize();
+                break;
+        }
+
+        // ── 三种模式都应用 horizontalOffset 和 verticalOffset ──
+        //     先绕 X 轴旋转（垂直偏移：正=上，负=下）
+        aimDir = Quaternion.AngleAxis(verticalOffset, Vector3.right) * aimDir;
+        //     再绕 Y 轴旋转（水平偏移：正=右，负=左）
+        aimDir = Quaternion.AngleAxis(horizontalOffset, Vector3.up) * aimDir;
+
+        // ── 子弹从 firePoint（枪口/子弹预制体位置）生成，方向由方向控制决定 ──
+        Vector3 spawnPos = firePoint.position;
+
+        // ── 调试：用 DrawLine 可视化 ──
+        if (showDebugLine)
+        {
+            Debug.DrawRay(playerCamera.transform.position,
+                          aimDir * raycastMaxDist,
+                          Color.white, 0.5f);
+            Debug.DrawRay(spawnPos, aimDir * 20f, Color.red, 0.3f);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  精准命中判定 + 动态调整子弹飞行速度
+        //  使子弹从发射到击中目标始终固定 flightTime 秒
+        // ═══════════════════════════════════════════════════════
+        float actualSpeed = bulletSpeed; // 默认速度
+
+        RaycastHit rayHit;
+        if (Physics.Raycast(spawnPos, aimDir, out rayHit, raycastMaxDist, raycastLayerMask))
+        {
+            tick health = rayHit.collider.GetComponentInParent<tick>();
+            if (health != null)
+            {
+                // 根据距离自动计算速度：速度 = 距离 / 飞行时间
+                actualSpeed = rayHit.distance / flightTime;
+                if (actualSpeed < 1f) actualSpeed = 1f; // 防止太近时速度为负
+
+                health.TakeDamage(bulletDamage);
+                Debug.Log($" 命中 {health.name}！距离 {rayHit.distance:F1}m，" +
+                          $"飞行时间 {flightTime}s，自动调速为 {actualSpeed:F0}");
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  视觉子弹：仍然生成飞行动画（给玩家看）
+        // ═══════════════════════════════════════════════════════
+        GameObject bulletObj;
+
+        if (bulletPrefab != null)
+        {
+            bulletObj = Instantiate(bulletPrefab, spawnPos, Quaternion.LookRotation(aimDir));
+        }
+        else
+        {
+            // 没有预制体，创建红色小球
+            bulletObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            bulletObj.transform.position = spawnPos;
+            bulletObj.transform.forward = aimDir;
+            bulletObj.transform.localScale = Vector3.one * bulletSize;
+
+            Renderer renderer = bulletObj.GetComponent<Renderer>();
+            if (renderer != null)
+                renderer.material.color = Color.red;
+
+            Rigidbody rb = bulletObj.GetComponent<Rigidbody>();
+            if (rb == null)
+                rb = bulletObj.AddComponent<Rigidbody>();
+
+            rb.useGravity = false;
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+
+            // 添加碰撞检测脚本
+            BulletHit hitScript = bulletObj.AddComponent<BulletHit>();
+            hitScript.hitEffectPrefab = hitEffectPrefab;
+            hitScript.effectDuration = hitEffectDuration;
+            hitScript.damage = bulletDamage;
+
+            // 设为 bullet 层（Layer 7），避免子弹之间互相碰撞
+            bulletObj.layer = LayerMask.NameToLayer("bullet");
+
+            Destroy(bulletObj, bulletLifetime);
+        }
+
+        // 给子弹施加速度
+        Rigidbody bulletRb = bulletObj.GetComponent<Rigidbody>();
+        if (bulletRb != null)
+        {
+            bulletRb.velocity = aimDir * actualSpeed;
+        }
+    }
+
+    // ============================================================
+    //  弹药显示（OnGUI 即时渲染）
+    // ============================================================
+    void OnGUI()
+    {
+        float boxWidth = 160f;
+        float boxHeight = 30f;
+        float x = Screen.width - boxWidth - 20f;
+        float y = Screen.height - boxHeight - 20f;
+
+        Color originalColor = GUI.backgroundColor;
+
+        if (currentAmmo > 0)
+        {
+            GUI.backgroundColor = new Color(0, 0, 0, 0.5f);
+            GUI.Box(new Rect(x, y, boxWidth, boxHeight),
+                    $"\U0001f52b {currentAmmo} / {maxAmmo}");
+        }
+        else
+        {
+            GUI.backgroundColor = new Color(0.8f, 0.1f, 0.1f, 0.7f);
+            GUI.Box(new Rect(x, y, boxWidth, boxHeight),
+                    "\u26a0\ufe0f 弹药耗尽！按 R 购买");
+
+            GUI.backgroundColor = new Color(0, 0, 0, 0.6f);
+            GUI.Box(new Rect(Screen.width / 2f - 100f, Screen.height / 2f + 50f, 200f, 40f),
+                    "\u26a0\ufe0f 子弹用尽！请购买装备！");
+        }
+
+        GUI.backgroundColor = originalColor;
+    }
+
+    void UpdateAmmoDisplay()
+    {
+        if (currentAmmo > 0)
+            ammoEmptyWarned = false;
+    }
+
+    // ============================================================
+    //  购买 / 补弹
+    // ============================================================
+    public void BuyAmmo()
+    {
+        if (currentAmmo >= maxAmmo)
+        {
+            Debug.Log("\U0001f52b 弹药已满，无需购买");
+            return;
+        }
+
+        currentAmmo = maxAmmo;
+        ammoEmptyWarned = false;
+        UpdateAmmoDisplay();
+        Debug.Log($"\U0001f6d2 购买成功！弹药已补满：{currentAmmo}/{maxAmmo}");
+    }
+
+    public void AddAmmo(int amount)
+    {
+        currentAmmo = Mathf.Min(currentAmmo + amount, maxAmmo);
+        ammoEmptyWarned = false;
+        UpdateAmmoDisplay();
+    }
+}
+
+// ============================================================
+//  子弹命中处理
+// ============================================================
+public class BulletHit : MonoBehaviour
+{
+    public GameObject hitEffectPrefab;
+    public float effectDuration = 1f;
+    [Tooltip("子弹伤害值")]
+    public int damage = 20;
+
+    // 兼容 Collision 和 Trigger 两种检测方式
+    void OnCollisionEnter(Collision collision)
+    {
+        ProcessHit(collision.gameObject, collision.contacts[0].point);
+    }
+
+    void OnTriggerEnter(Collider other)
+    {
+        ProcessHit(other.gameObject, other.transform.position);
+    }
+
+    void ProcessHit(GameObject hitObject, Vector3 hitPoint)
+    {
+        if (hitObject.CompareTag("Player"))
+            return;
+
+        // ── 从被撞物体向上找到 tick 脚本（血条控制，挂在机器人根节点） ──
+        tick health = hitObject.GetComponentInParent<tick>();
+        if (health != null)
+        {
+            health.TakeDamage(damage);
+            Debug.Log($" 命中 {health.name}！造成 {damage} 点伤害");
+        }
+        else
+        {
+            Debug.Log($" 撞到了 {hitObject.name}，未找到 tick 组件");
+        }
+
+        // ── 命中特效 ──
+        if (hitEffectPrefab != null)
+        {
+            GameObject effect = Instantiate(hitEffectPrefab, hitPoint, Quaternion.identity);
+            Destroy(effect, effectDuration);
+        }
+        else
+        {
+            GameObject spark = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            spark.transform.position = hitPoint;
+            spark.transform.localScale = Vector3.one * 0.05f;
+            Renderer renderer = spark.GetComponent<Renderer>();
+            if (renderer != null) renderer.material.color = Color.yellow;
+            Destroy(spark, 0.2f);
+        }
+
+        Destroy(gameObject);
+    }
+}
