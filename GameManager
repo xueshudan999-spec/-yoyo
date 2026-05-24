@@ -1,0 +1,274 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+/// <summary>
+/// 游戏管理器：处理任务完成提示 + Esc 暂停面板。
+/// 自动创建，无需手动挂载。
+/// </summary>
+public class GameManager : MonoBehaviour
+{
+    public static GameManager Instance;
+
+    [Header("任务完成")]
+    public string missionCompleteText = " 任务完成！";
+    public float missionCompleteDelay = 1.5f;
+
+    [Header("场景")]
+    public string roomSceneName = "Room";
+
+    [Header("暂停面板")]
+    public Color panelBgColor = new Color(0f, 0f, 0f, 0.75f);
+
+    // ── 内部 ──
+    private int totalRobots;
+    private int robotsKilled;
+    private bool missionCompleteShown = false;
+    private bool isPaused = false;
+
+    private Canvas uiCanvas;
+    private GameObject missionCompleteObj;
+    private GameObject pausePanelObj;
+
+    void Awake()
+    {
+        // 单例：如果已有实例则销毁自己
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+    }
+
+    void Start()
+    {
+        // 统计场景中所有机器人
+        tick[] allRobots = FindObjectsOfType<tick>();
+        totalRobots = allRobots.Length;
+        robotsKilled = 0;
+
+        if (totalRobots == 0)
+            Debug.Log(" 场景中没有机器人，跳过任务完成检测");
+        else
+            Debug.Log($" 场景中机器人总数：{totalRobots}");
+
+        BuildUI();
+    }
+
+    void Update()
+    {
+        // ── Esc 暂停/继续 ──
+        if (Input.GetKeyDown(KeyCode.Escape))
+        {
+            if (isPaused)
+                ResumeGame();
+            else
+                PauseGame();
+        }
+    }
+
+    // ============================================================
+    /// <summary> 机器人死亡时调用的入口 </summary>
+    public void OnRobotDestroyed()
+    {
+        if (totalRobots <= 0) return;
+
+        robotsKilled++;
+        Debug.Log($" 机器人死亡 {robotsKilled}/{totalRobots}");
+
+        if (robotsKilled >= totalRobots && !missionCompleteShown)
+        {
+            missionCompleteShown = true;
+            StartCoroutine(ShowMissionComplete());
+        }
+    }
+
+    System.Collections.IEnumerator ShowMissionComplete()
+    {
+        yield return new WaitForSeconds(missionCompleteDelay);
+
+        if (missionCompleteObj != null)
+            missionCompleteObj.SetActive(true);
+
+        Debug.Log(" 任务完成！所有机器人已被消灭！");
+    }
+
+    // ============================================================
+    //  暂停 / 继续
+    // ============================================================
+    void PauseGame()
+    {
+        if (missionCompleteShown) return; // 任务完成时不暂停
+
+        isPaused = true;
+        Time.timeScale = 0f;
+
+        if (pausePanelObj != null)
+            pausePanelObj.SetActive(true);
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
+        Debug.Log("⏸ 游戏暂停");
+    }
+
+    public void ResumeGame()
+    {
+        isPaused = false;
+        Time.timeScale = 1f;
+
+        if (pausePanelObj != null)
+            pausePanelObj.SetActive(false);
+
+        Debug.Log(" 游戏继续");
+    }
+
+    /// <summary>
+    /// 退出游戏
+    /// </summary>
+    public void QuitGame()
+    {
+        Time.timeScale = 1f;
+        Debug.Log(" 退出游戏");
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
+    }
+
+    // ============================================================
+    //  动态创建 UI
+    // ============================================================
+    void BuildUI()
+    {
+        // ── Canvas ──
+        GameObject canvasObj = new GameObject("GameManagerCanvas");
+        canvasObj.tag = "GameController";
+        uiCanvas = canvasObj.AddComponent<Canvas>();
+        uiCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        uiCanvas.sortingOrder = 1000;
+        canvasObj.AddComponent<CanvasScaler>();
+        canvasObj.AddComponent<GraphicRaycaster>();
+
+        // ── 任务完成提示（默认隐藏） ──
+        missionCompleteObj = new GameObject("MissionComplete");
+        missionCompleteObj.transform.SetParent(canvasObj.transform, false);
+
+        // 背景
+        GameObject mcBg = new GameObject("MCBg");
+        mcBg.transform.SetParent(missionCompleteObj.transform, false);
+        Image mcBgImg = mcBg.AddComponent<Image>();
+        mcBgImg.color = new Color(0f, 0f, 0f, 0.6f);
+        RectTransform mcBgRt = mcBg.GetComponent<RectTransform>();
+        mcBgRt.anchorMin = Vector2.zero;
+        mcBgRt.anchorMax = Vector2.one;
+        mcBgRt.sizeDelta = Vector2.zero;
+
+        // 文字
+        GameObject mcTextObj = new GameObject("MCText");
+        mcTextObj.transform.SetParent(missionCompleteObj.transform, false);
+        Text mcText = mcTextObj.AddComponent<Text>();
+        mcText.text = missionCompleteText;
+        mcText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        mcText.fontSize = 48;
+        mcText.fontStyle = FontStyle.Bold;
+        mcText.alignment = TextAnchor.MiddleCenter;
+        mcText.color = new Color(1f, 0.8f, 0f, 1f); // 金色
+
+        RectTransform mcTextRt = mcTextObj.GetComponent<RectTransform>();
+        mcTextRt.anchorMin = new Vector2(0.5f, 0.5f);
+        mcTextRt.anchorMax = new Vector2(0.5f, 0.5f);
+        mcTextRt.sizeDelta = new Vector2(500f, 100f);
+        mcTextRt.anchoredPosition = Vector2.zero;
+
+        missionCompleteObj.SetActive(false);
+
+        // ── 暂停面板（默认隐藏） ← 弹出确认对话框 ──
+        pausePanelObj = new GameObject("PausePanel");
+        pausePanelObj.transform.SetParent(canvasObj.transform, false);
+        RectTransform ppRt = pausePanelObj.AddComponent<RectTransform>();
+        ppRt.anchorMin = Vector2.zero;
+        ppRt.anchorMax = Vector2.one;
+        ppRt.sizeDelta = Vector2.zero;
+
+        Image ppBg = pausePanelObj.AddComponent<Image>();
+        ppBg.color = panelBgColor;
+
+        // ── 对话框容器（居中） ──
+        GameObject dialogObj = new GameObject("ConfirmDialog");
+        dialogObj.transform.SetParent(pausePanelObj.transform, false);
+        RectTransform dialogRt = dialogObj.AddComponent<RectTransform>();
+        dialogRt.sizeDelta = new Vector2(420f, 220f);
+        dialogRt.anchorMin = new Vector2(0.5f, 0.5f);
+        dialogRt.anchorMax = new Vector2(0.5f, 0.5f);
+        dialogRt.anchoredPosition = Vector2.zero;
+
+        Image dialogBg = dialogObj.AddComponent<Image>();
+        dialogBg.color = new Color(0.12f, 0.12f, 0.18f, 1f);
+
+        // ── 提示文字 ──
+        CreatePauseLabel(dialogObj, "是否决定离开？", new Vector2(0f, 45f), 36);
+
+        // ── 是（退出游戏） ──
+        CreatePauseButton(dialogObj, "是", new Vector2(-70f, -40f), () => QuitGame());
+
+        // ── 否（继续游戏） ──
+        CreatePauseButton(dialogObj, "否", new Vector2(70f, -40f), () => ResumeGame());
+
+        pausePanelObj.SetActive(false);
+    }
+
+    void CreatePauseLabel(GameObject parent, string text, Vector2 position, int fontSize)
+    {
+        GameObject labelObj = new GameObject("Label_" + text);
+        labelObj.transform.SetParent(parent.transform, false);
+        Text labelText = labelObj.AddComponent<Text>();
+        labelText.text = text;
+        labelText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        labelText.fontSize = fontSize;
+        labelText.fontStyle = FontStyle.Bold;
+        labelText.color = Color.white;
+        labelText.alignment = TextAnchor.MiddleCenter;
+
+        RectTransform rt = labelObj.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(400f, 60f);
+        rt.anchoredPosition = position;
+    }
+
+    void CreatePauseButton(GameObject parent, string text, Vector2 position, UnityEngine.Events.UnityAction action)
+    {
+        GameObject btnObj = new GameObject("Btn_" + text);
+        btnObj.transform.SetParent(parent.transform, false);
+
+        RectTransform btnRt = btnObj.AddComponent<RectTransform>();
+        btnRt.sizeDelta = new Vector2(220f, 55f);
+        btnRt.anchorMin = new Vector2(0.5f, 0.5f);
+        btnRt.anchorMax = new Vector2(0.5f, 0.5f);
+        btnRt.anchoredPosition = position;
+
+        Image btnImg = btnObj.AddComponent<Image>();
+        btnImg.color = new Color(0.2f, 0.5f, 0.8f, 1f);
+
+        Button btn = btnObj.AddComponent<Button>();
+        btn.targetGraphic = btnImg;
+        btn.onClick.AddListener(action);
+
+        // 按钮文字
+        GameObject labelObj = new GameObject("Label");
+        labelObj.transform.SetParent(btnObj.transform, false);
+        Text labelText = labelObj.AddComponent<Text>();
+        labelText.text = text;
+        labelText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        labelText.fontSize = 24;
+        labelText.color = Color.white;
+        labelText.alignment = TextAnchor.MiddleCenter;
+
+        RectTransform labelRt = labelObj.GetComponent<RectTransform>();
+        labelRt.anchorMin = Vector2.zero;
+        labelRt.anchorMax = Vector2.one;
+        labelRt.sizeDelta = Vector2.zero;
+    }
+}
