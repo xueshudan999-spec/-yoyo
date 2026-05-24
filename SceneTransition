@@ -1,0 +1,115 @@
+using System.Collections;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+using UnityEngine.UI;
+
+/// <summary>
+/// 场景过渡管理器：任何场景切换都经由此处，带上平滑的淡入淡出效果。
+///
+/// 用法：
+///   SceneTransition.LoadScene("FPS-scenes");
+///   SceneTransition.LoadScene("Room", 0.3f);
+/// </summary>
+public class SceneTransition : MonoBehaviour
+{
+    // ── 单例 ──
+    private static SceneTransition instance;
+    private static GameObject overlayObj;
+
+    // ── 配置 ──
+    private const float DEFAULT_FADE_DURATION = 0.35f;
+    private static Color fadeColor = Color.black;
+
+    /// <summary> 淡出 + 加载场景 + 淡入 </summary>
+    public static void LoadScene(string sceneName, float fadeDuration = DEFAULT_FADE_DURATION)
+    {
+        if (instance != null)
+            instance.StopAllCoroutines();
+
+        CreateOverlay();
+        instance.StartCoroutine(TransitionRoutine(sceneName, fadeDuration));
+    }
+
+    // ============================================================
+    //  创建一个全屏黑色遮罩并淡入/淡出
+    // ============================================================
+    static void CreateOverlay()
+    {
+        // 确保有一个持久的 GameObject 来运行协程
+        if (instance == null)
+        {
+            GameObject go = new GameObject("__SceneTransition__");
+            DontDestroyOnLoad(go);
+            instance = go.AddComponent<SceneTransition>();
+        }
+
+        // 如果已有遮罩，复用
+        if (overlayObj != null)
+        {
+            overlayObj.SetActive(true);
+            overlayObj.transform.SetParent(null);
+            return;
+        }
+
+        // 创建 Canvas
+        GameObject canvasObj = new GameObject("TransitionCanvas");
+        DontDestroyOnLoad(canvasObj);
+        overlayObj = canvasObj;
+
+        Canvas canvas = canvasObj.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32767; // 最顶层
+
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920, 1080);
+
+        canvasObj.AddComponent<GraphicRaycaster>();
+
+        // 遮罩 Image
+        GameObject imgObj = new GameObject("FadeImage");
+        imgObj.transform.SetParent(canvasObj.transform, false);
+        UnityEngine.UI.Image img = imgObj.AddComponent<UnityEngine.UI.Image>();
+        img.color = new Color(fadeColor.r, fadeColor.g, fadeColor.b, 0f);
+        img.raycastTarget = true;
+
+        RectTransform rt = imgObj.GetComponent<RectTransform>();
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.sizeDelta = Vector2.zero;
+        rt.anchoredPosition = Vector2.zero;
+    }
+
+    static IEnumerator TransitionRoutine(string sceneName, float duration)
+    {
+        UnityEngine.UI.Image img = overlayObj.GetComponentInChildren<UnityEngine.UI.Image>();
+        if (img == null) yield break;
+
+        // ── 淡出（画面变黑） ──
+        float t = 0f;
+        while (t < duration)
+        {
+            float alpha = t / duration;
+            img.color = new Color(fadeColor.r, fadeColor.g, fadeColor.b, alpha);
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        img.color = new Color(fadeColor.r, fadeColor.g, fadeColor.b, 1f);
+
+        // ── 加载场景 ──
+        SceneManager.LoadScene(sceneName);
+
+        // ── 淡入（画面亮起） ──
+        t = 0f;
+        while (t < duration)
+        {
+            float alpha = 1f - (t / duration);
+            img.color = new Color(fadeColor.r, fadeColor.g, fadeColor.b, alpha);
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        img.color = new Color(fadeColor.r, fadeColor.g, fadeColor.b, 0f);
+
+        overlayObj.SetActive(false);
+    }
+}
